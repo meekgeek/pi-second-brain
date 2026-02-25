@@ -1,0 +1,29 @@
+{
+  "name": "@meekgeek/pi-second-brain",
+  "version": "1.0.0",
+  "description": "PARA-based knowledge management extension for pi — automatic knowledge capture, daily notes, and smart retrieval powered by qmd",
+  "keywords": ["pi-package", "knowledge-management", "para", "second-brain", "daily-notes"],
+  "license": "MIT",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/meekgeek/pi-second-brain"
+  },
+  "pi": {
+    "extensions": ["./src/index.ts"],
+    "skills": ["./skills"],
+    "prompts": ["./prompts"]
+  },
+  "scripts": {
+    "setup": "node ./scripts/setup.mjs",
+    "clean": "echo 'nothing to clean'",
+    "build": "echo 'nothing to build'"
+  },
+  "peerDependencies": {
+    "@mariozechner/pi-ai": "*",
+    "@mariozechner/pi-agent-core": "*",
+    "@mariozechner/pi-coding-agent": "*",
+    "@mariozechner/pi-tui": "*",
+    "@sinclair/typebox": "*"
+  }
+}
