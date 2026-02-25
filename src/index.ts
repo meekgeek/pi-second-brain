@@ -670,12 +670,15 @@ export default function secondBrain(pi: ExtensionAPI): void {
 	});
 
 	pi.registerCommand("priorities", {
-		description: "View and set today's priorities",
+		description: "View, set, and toggle today's priorities",
 		handler: async (_args, ctx) => {
 			if (!ctx.hasUI) return;
 
 			const priorities = getPriorities();
-			if (priorities.length === 0 || priorities.every((p) => !p.text.trim() || p.text === " ")) {
+			const hasPriorities = priorities.length > 0 && priorities.some((p) => p.text.trim() && p.text !== " ");
+
+			if (!hasPriorities) {
+				// No priorities — open editor to set them
 				const input = await ctx.ui.editor(
 					"Set today's priorities (one per line):",
 					""
@@ -685,44 +688,115 @@ export default function secondBrain(pi: ExtensionAPI): void {
 						.split("\n")
 						.filter((l) => l.trim())
 						.map((l) => `- [ ] ${l.trim()}`);
-
-					// Rewrite priorities section in daily note
-					const path = ensureDailyNote();
-					const content = readFileSync(path, "utf-8");
-					const fileLines = content.split("\n");
-					let startIdx = -1;
-					let endIdx = -1;
-
-					for (let i = 0; i < fileLines.length; i++) {
-						if (fileLines[i].startsWith("## Priorities")) {
-							startIdx = i + 1;
-						} else if (startIdx >= 0 && fileLines[i].startsWith("## ")) {
-							endIdx = i;
-							break;
-						}
-					}
-
-					if (startIdx >= 0) {
-						if (endIdx === -1) endIdx = fileLines.length;
-						fileLines.splice(startIdx, endIdx - startIdx, ...lines, "");
-						writeFileSync(path, fileLines.join("\n"), "utf-8");
-						reindexQueued = true;
-					}
-
+					writePriorities(lines);
+					reindexQueued = true;
 					ctx.ui.notify("✅ Priorities set!", "success");
 					updateWidgets(ctx);
 				}
 			} else {
-				const display = priorities
-					.map((p) => {
-						const check = p.done ? "☑" : "☐";
-						return `${check} ${p.text}`;
-					})
-					.join("\n");
-				ctx.ui.notify(`📅 Today's Priorities:\n${display}`, "info");
+				// Interactive toggle UI
+				await ctx.ui.custom<void>((tui, theme, _kb, done) => {
+					let selected = 0;
+					let items = [...priorities];
+
+					function buildLines(width: number): string[] {
+						const lines: string[] = [];
+						lines.push("");
+						const title = theme.fg("accent", theme.bold(" 📅 Priorities "));
+						lines.push(
+							truncateToWidth(
+								theme.fg("borderAccent", "━".repeat(3)) + title + theme.fg("borderAccent", "━".repeat(Math.max(0, width - 20))),
+								width
+							)
+						);
+						lines.push("");
+
+						const done = items.filter((p) => p.done).length;
+						lines.push(truncateToWidth(`  ${theme.fg("muted", `${done}/${items.length} completed`)}`, width));
+						lines.push("");
+
+						for (let i = 0; i < items.length; i++) {
+							const p = items[i];
+							const pointer = i === selected ? theme.fg("accent", "▸ ") : "  ";
+							const check = p.done ? theme.fg("success", "☑") : theme.fg("muted", "☐");
+							const text = p.done
+								? theme.fg("dim", theme.strikethrough(p.text))
+								: theme.fg("text", p.text);
+							lines.push(truncateToWidth(`${pointer}${check} ${text}`, width));
+						}
+
+						lines.push("");
+						lines.push(truncateToWidth("  " + theme.fg("dim", "↑↓ navigate • Space/Enter toggle • a add • Esc close"), width));
+						lines.push("");
+						return lines;
+					}
+
+					let cachedLines: string[] | undefined;
+					let cachedWidth: number | undefined;
+
+					return {
+						render: (w: number) => {
+							if (cachedLines && cachedWidth === w) return cachedLines;
+							cachedLines = buildLines(w);
+							cachedWidth = w;
+							return cachedLines;
+						},
+						invalidate: () => { cachedWidth = undefined; cachedLines = undefined; },
+						handleInput: (data: string) => {
+							if (matchesKey(data, Key.escape) || matchesKey(data, "q")) {
+								done();
+							} else if (matchesKey(data, Key.up) || matchesKey(data, "k")) {
+								selected = Math.max(0, selected - 1);
+							} else if (matchesKey(data, Key.down) || matchesKey(data, "j")) {
+								selected = Math.min(items.length - 1, selected + 1);
+							} else if (matchesKey(data, Key.space) || matchesKey(data, Key.enter)) {
+								// Toggle the selected priority
+								items[selected] = { ...items[selected], done: !items[selected].done };
+								// Write back to daily note
+								const lines = items.map((p) =>
+									p.done ? `- [x] ${p.text}` : `- [ ] ${p.text}`
+								);
+								writePriorities(lines);
+								reindexQueued = true;
+								updateWidgets(ctx);
+							} else if (data === "a") {
+								// Can't open editor inside custom, so close and re-enter
+								// For now, just notify
+								ctx.ui.notify("Use /priorities when no priorities exist, or edit daily note directly", "info");
+							}
+							cachedWidth = undefined;
+							cachedLines = undefined;
+							tui.requestRender();
+						},
+					};
+				});
 			}
 		},
 	});
+
+	/** Helper: write priority lines back to the daily note */
+	function writePriorities(lines: string[]): void {
+		const path = ensureDailyNote();
+		const content = readFileSync(path, "utf-8");
+		const fileLines = content.split("\n");
+		let startIdx = -1;
+		let endIdx = -1;
+
+		for (let i = 0; i < fileLines.length; i++) {
+			if (fileLines[i].startsWith("## Priorities")) {
+				startIdx = i + 1;
+			} else if (startIdx >= 0 && fileLines[i].startsWith("## ")) {
+				endIdx = i;
+				break;
+			}
+		}
+
+		if (startIdx >= 0) {
+			if (endIdx === -1) endIdx = fileLines.length;
+			fileLines.splice(startIdx, endIdx - startIdx, ...lines, "");
+			writeFileSync(path, fileLines.join("\n"), "utf-8");
+		}
+	}
 
 	pi.registerCommand("review", {
 		description: "Weekly review wizard — process inbox, review projects, update priorities",
